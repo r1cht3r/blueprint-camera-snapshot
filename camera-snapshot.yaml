@@ -1,0 +1,131 @@
+blueprint:
+  name: Send a notification with camera snapshot when motion is detected with blocking state and URL (or lovelace view) on click 
+  description: >
+    This automation blueprint creates a camera snapshot if motion is detected 
+    and sends a notification to your phone with the picture. 
+    Optionally you can define a binary sensor that will block the automation from running when state is ON.
+    For Example do not run when somebody is home (you can use the people_home template example).
+    
+    
+    Required entities:
+      - Motion sensor (binary_sensor in motion class)
+      - Target entity (camera)
+      - Target entity (mobile_app)
+    
+    Optional features:
+      Is is also possible to define a blocking entity, which blocks the automation from running when this entity's state is on.
+      If you do not enable the optional entities the automation will skip these conditions.
+    
+    Optional entities:
+      - Blocking entity (any entity with state on/off), example people home or not
+      - URI for clickAction on the notification
+
+  domain: automation
+
+  input:
+    motion_sensor:
+      name: Motion sensor
+      description: The sensor wich triggers the snapshot creation
+      selector:
+          entity:
+            domain: input_boolean 
+
+    camera:
+      name: Camera
+      description: The camera which creates the snapshot
+      selector:
+        entity:
+          domain: camera
+
+    notify_device:
+      name: Device to notify
+      description: Device needs to run the official Home Assistant app to receive notifications
+      selector:
+        device:
+          integration: mobile_app
+
+    is_ios:
+      name: Is it an iOS device?
+      description: Toggle if your selected device runs iOS, default is Android
+      selector:
+        boolean:
+      default: false
+
+    blocker_entity:
+      name: '(OPTIONAL) Blocking entity'
+      description: If this entity state is on, it will prevent the automation from running. E.g. somebody is home (binary_sensor.people_home).
+      default:
+      selector:
+        entity:
+
+    notification_title:
+      name: Notification title (Optional)
+      description: 'Default: "Motion detected!"'
+      default: "Motion detected!"
+
+    notification_message:
+      name: Notification message (Optional)
+      description: 'Default: "{{ motion_sensor_name }} detected movement!"'
+      default: "{{ motion_sensor_name }} detected movement!"
+
+    clickAction:
+      name: ClickAction URI (Optional)
+      description: An URI to open when you click on the notification, can be an external URI (https://www.google.com) or an internal URI to a lovelace dashboard or view (/lovelace/cctv)
+      default: ""
+
+    delay:
+      name: Delay (Optional)
+      description: Wait before creating camera snapshot
+      default: ""
+      selector:
+        number:
+            min: 0
+            max: 60
+            unit_of_measurement: seconds
+            mode: slider
+
+
+trigger:
+  platform: state
+  entity_id: !input motion_sensor
+  from: "off"
+  to: "on"
+
+variables:
+  motion_sensor: !input motion_sensor
+  motion_sensor_name: "{{ states[motion_sensor].name }}"
+  camera: !input camera
+  notify_device: !input notify_device
+  is_ios: !input is_ios
+  notification_title: !input notification_title
+  notification_message: !input notification_message
+  delay: !input delay
+  snapshot_create_file_path: "/config/www/tmp/snapshot_{{ states[camera].object_id }}.jpg"
+  snapshot_access_file_path: "{{ snapshot_create_file_path | replace('/config/www','/local') }}"
+  blocker_entity: !input blocker_entity
+  clickAction: !input clickAction
+  
+
+condition:
+  - condition: template
+    value_template: >
+      {{ (blocker_entity == none) or (states[blocker_entity].state == 'off') }}
+
+action:
+  - delay: "{{ delay }}"
+
+  - service: camera.snapshot
+    entity_id: !input camera
+    data:
+      filename: "{{ snapshot_create_file_path }}"
+
+  - device_id: !input notify_device
+    domain: mobile_app
+    type: notify
+    title: "{{ notification_title }}"
+    message: "{{ notification_message }}"
+    data: >
+      {% set android_data = { "channel": "alarm_motion", "group": "alarm_motion", "ttl": 0, "priority": "high", "clickAction": "%s", "image": "%s"} | format(clickAction, snapshot_access_file_path) %}
+      {% set ios_data = { "channel": "alarm_motion", "url": "%s", "apns_headers": { "apns-collapse-id": "alarm_motion" }, "attachment": {"url": "%s", "content_type": "JPEG"},  "push": { "sound": { "name": "default", "critical": 1, "volume": 1.0 } } } | format(clickAction, snapshot_access_file_path) %}
+      {{ ios_data if is_ios else android_data }}
+     
